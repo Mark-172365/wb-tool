@@ -527,33 +527,21 @@
         <div class="grid-4" id="myMetrics"></div>
       </div>
 
-      <!-- Competitor comparison -->
+      <!-- Search queries all (КЛЮЧИ — главное для клиента) -->
       <div class="section">
-        <div class="section-title">Конкуренты</div>
-        <div class="grid-2" id="competitorCards"></div>
-      </div>
-
-      <!-- Search queries all -->
-      <div class="section">
-        <div class="section-title">Поисковые запросы — сравнение конверсий</div>
+        <div class="section-title">🔑 Поисковые запросы — сравнение конверсий</div>
         <div class="search-queries" id="searchQueries"></div>
       </div>
 
-      <!-- SEO recommendations per article -->
+      <!-- SEO recommendations per article (КЛЮЧИ) -->
       <div class="section">
-        <div class="section-title">📌 SEO — ключи по артикулам конкурентов</div>
+        <div class="section-title">📌 SEO — какие ключи добавить в карточку</div>
         <div id="seoSection"></div>
       </div>
 
-      <!-- Warehouses -->
+      <!-- AI Analysis (СТРАТЕГИЯ — на втором месте) -->
       <div class="section">
-        <div class="section-title">🏭 Склады — где продают конкуренты</div>
-        <div id="warehouseSection"></div>
-      </div>
-
-      <!-- AI Analysis -->
-      <div class="section">
-        <div class="section-title">ИИ-анализ и рекомендации</div>
+        <div class="section-title">🤖 ИИ-анализ и рекомендации</div>
         <div class="ai-panel">
           <div class="ai-panel-header">
             <div class="ai-dot"></div>
@@ -563,6 +551,18 @@
             <span class="thinking">Загрузка анализа...</span>
           </div>
         </div>
+      </div>
+
+      <!-- Competitor comparison -->
+      <div class="section">
+        <div class="section-title">📊 Главные конкуренты</div>
+        <div class="grid-2" id="competitorCards"></div>
+      </div>
+
+      <!-- Warehouses -->
+      <div class="section">
+        <div class="section-title">🏭 Склады — где продают конкуренты</div>
+        <div id="warehouseSection"></div>
       </div>
     </div>
 
@@ -876,8 +876,17 @@
         });
         competitors = Object.values(byArticle);
 
-        // Sort by orders desc, take top 6
-        competitors = competitors.sort((a, b) => b.orders - a.orders).slice(0, 6);
+        // Collapse duplicate BRANDS — same brand with different articles = one seller, keep strongest
+        const byBrand = {};
+        competitors.forEach((c) => {
+          const brandKey = (c.brand || c.article).trim().toLowerCase();
+          const existing = byBrand[brandKey];
+          if (!existing || (c.orders > existing.orders)) byBrand[brandKey] = c;
+        });
+        competitors = Object.values(byBrand);
+
+        // Sort by orders desc, take top 3 main competitors
+        competitors = competitors.sort((a, b) => b.orders - a.orders).slice(0, 3);
 
         const myOrders = Number(m["Заказы, шт"]?.my) || 0;
 
@@ -1073,7 +1082,7 @@
         const colToKey = { 1: "my", 2: "comp1", 4: "comp2", 6: "comp3", 8: "comp4" };
 
         // Build competitors dynamically from the uploaded file, sorted by orders, top 6
-        const competitorList = cols
+        let competitorListRaw = cols
           .filter((c) => c.article !== myArticle)
           .map((c) => {
             const k = colToKey[c.col];
@@ -1087,9 +1096,16 @@
               reviews: m["Количество отзывов"]?.[k],
               ctr: m["CTR"]?.[k],
             };
-          })
+          });
+        // Collapse duplicate brands, keep strongest
+        const aiByBrand = {};
+        competitorListRaw.forEach((c) => {
+          const bk = (c.brand || c.article).trim().toLowerCase();
+          if (!aiByBrand[bk] || c.orders > aiByBrand[bk].orders) aiByBrand[bk] = c;
+        });
+        const competitorList = Object.values(aiByBrand)
           .sort((a, b) => b.orders - a.orders)
-          .slice(0, 6);
+          .slice(0, 3);
 
         // SEO opportunities: competitor keys (vol>=1000, conv>=5) where my article is absent
         const searches = parsedData.articleSearches || [];
@@ -1146,7 +1162,7 @@
 ДАННЫЕ ПРОДАВЦА (${dataForAI.myBrand}, арт. ${dataForAI.myArticle}):
 ${JSON.stringify(dataForAI.metrics, null, 2)}
 
-КОНКУРЕНТЫ (топ-6 по заказам):
+КОНКУРЕНТЫ (топ-3 главных по заказам):
 ${JSON.stringify(dataForAI.competitors, null, 2)}
 
 ТОП ПОИСКОВЫЕ ЗАПРОСЫ:
@@ -1158,12 +1174,15 @@ ${JSON.stringify(dataForAI.seoOpportunities, null, 2)}
 СКЛАДЫ КОНКУРЕНТОВ (которых нет у продавца):
 ${JSON.stringify(dataForAI.missingWarehouses, null, 2)}
 
-Дай анализ в следующем формате:
+Дай анализ в следующем формате. ГЛАВНОЕ для продавца — ключи и поисковые запросы, поэтому начни с них:
+
+🔑 SEO И КЛЮЧЕВЫЕ ЗАПРОСЫ (САМОЕ ВАЖНОЕ)
+[Конкретный список ключей которые нужно добавить в карточку — бери из списка SEO-возможностей, с объёмами и конверсиями. Объясни почему именно эти ключи дадут результат. Это главная часть отчёта — будь подробным.]
 
 🔍 ГЛАВНАЯ ПРОБЛЕМА
 [Одна главная причина почему у конкурентов больше заказов — конкретно, с цифрами]
 
-🎯 ЧТО СДЕЛАТЬ ПРЯМО СЕЙЧАС (по приоритетам):
+🎯 СТРАТЕГИЯ — ЧТО СДЕЛАТЬ (по приоритетам):
 
 [ПРИОРИТЕТ 1 — ВЫСОКИЙ]
 [Конкретное действие с объяснением почему это важно и какого результата ожидать]
@@ -1176,9 +1195,6 @@ ${JSON.stringify(dataForAI.missingWarehouses, null, 2)}
 
 💰 ЦЕНОВАЯ СТРАТЕГИЯ
 [Конкретный совет по цене исходя из данных]
-
-🔑 SEO И КЛЮЧЕВЫЕ ЗАПРОСЫ
-[Какие ключи добавить в карточку — бери из списка SEO-возможностей, с объёмами и конверсиями]
 
 🏭 СКЛАДЫ
 [Каких складов не хватает и сколько продаж это может дать]
