@@ -518,6 +518,10 @@
           ✨ Анализировать
         </button>
       </div>
+
+      <div id="myArticleWarning" style="display:none;background:rgba(239,68,68,0.1);border:1px solid #ef4444;border-radius:10px;padding:14px 18px;margin-top:12px;color:#ef4444;font-size:14px;">
+        ⚠️ В загруженных файлах нет вашего товара (артикул 384687893). Загрузите отчёт «Сравнение карточек», где ваш товар идёт первым в сравнении.
+      </div>
     </div>
 
     <div id="results">
@@ -621,6 +625,13 @@
       function finishLoading() {
         parsedData = mergeReports(allFiles);
         renderFileList();
+        // Show warning if my article not found in any file
+        const warnEl = document.getElementById('myArticleWarning');
+        if (parsedData && parsedData.noMyArticle) {
+          if (warnEl) warnEl.style.display = 'block';
+        } else {
+          if (warnEl) warnEl.style.display = 'none';
+        }
       }
 
       function renderFileList() {
@@ -644,6 +655,8 @@
         processFiles([file]);
       }
 
+      const MY_ARTICLE = "384687893";
+
       function parseWBReport(wb) {
         const data = {};
 
@@ -652,33 +665,49 @@
         if (metricsSheet) {
           const rows = XLSX.utils.sheet_to_json(metricsSheet, { header: 1 });
 
-          // Row 0 is the title, Row 1 has article headers, data starts at Row 2
-          // Find the header row that contains "Артикул WB"
           let headerIdx = rows.findIndex(r => (r||[]).some(c => String(c||'').includes('Артикул WB')));
           if (headerIdx === -1) headerIdx = 1;
           const headerRow = rows[headerIdx] || [];
 
-          // Map value columns 1,2,4,6,8 to article numbers
+          // Map value columns to article numbers
           const valueCols = [1, 2, 4, 6, 8];
-          data.articleColumns = valueCols.map(ci => {
+          const colArticles = valueCols.map(ci => {
             const h = String(headerRow[ci] || '');
-            // Match article number but NOT "Разница" (difference) columns
             const m = h.match(/Артикул WB (\d{6,})/);
             return { col: ci, article: m ? m[1] : null };
           }).filter(x => x.article);
 
-          data.metrics = {};
+          data.articleColumns = colArticles;
+
+          // Does THIS file contain my article? In which column?
+          const myCol = colArticles.find(c => c.article === MY_ARTICLE);
+          data.hasMyArticle = !!myCol;
+
+          // Build raw metrics keyed by column
+          const rawMetrics = {};
           rows.slice(headerIdx + 1).forEach((row) => {
             const key = row[0];
             if (!key) return;
+            rawMetrics[key] = { 1: row[1], 2: row[2], 4: row[4], 6: row[6], 8: row[8] };
+          });
+
+          // Remap so that "my" = my article's column, comps = the rest
+          data.metrics = {};
+          const compCols = colArticles.filter(c => c.article !== MY_ARTICLE).map(c => c.col);
+          Object.keys(rawMetrics).forEach(key => {
+            const r = rawMetrics[key];
             data.metrics[key] = {
-              my: row[1], comp1: row[2], comp2: row[4], comp3: row[6], comp4: row[8],
-              diff1: row[3], diff2: row[5], diff3: row[7], diff4: row[9],
+              my: myCol ? r[myCol.col] : r[1],
+              comp1: r[compCols[0]], comp2: r[compCols[1]],
+              comp3: r[compCols[2]], comp4: r[compCols[3]],
             };
           });
+
+          // Store competitor articles in order matching comp1-4
+          data.compArticles = compCols.map(col => colArticles.find(c => c.col === col)?.article).filter(Boolean);
         }
 
-        // Search queries - all articles combined
+        // Search queries - all articles combined (column positions depend on article order)
         const searchSheet = wb.Sheets["Поисковые запросы по всем ар..."] ||
           Object.keys(wb.Sheets).find(n => n.includes("Поисковые запросы по всем"));
         if (searchSheet) {
@@ -690,15 +719,13 @@
           }));
         }
 
-        // Per-article search queries (competitors + my own)
+        // Per-article search queries
         data.articleSearches = [];
         Object.keys(wb.Sheets).forEach(name => {
-          // Match "Поисковые запросы по артик..." but NOT "по всем артикулам"
           if (!name.includes("Поисковые запросы по артик")) return;
           if (name.includes("по всем")) return;
           const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1 });
           if (rows.length < 2) return;
-          // Extract article number from header row (reliable, sheet name is truncated)
           const header = rows[0][0] || '';
           const artMatch = header.match(/артикулу (\d+)/);
           const article = artMatch ? artMatch[1] : name;
@@ -729,21 +756,21 @@
       }
 
       function mergeReports(files) {
-        if (files.length === 1) return files[0];
-        const base = JSON.parse(JSON.stringify(files[0]));
-        for (let i = 1; i < files.length; i++) {
-          const f = files[i];
-          // Merge article columns (unique articles)
+        // Find the file that actually contains my article — use it as base for MY metrics
+        const baseFile = files.find(f => f.hasMyArticle);
+        if (!baseFile) return { noMyArticle: true };
+
+        const base = JSON.parse(JSON.stringify(baseFile));
+
+        // Collect competitors and their data from ALL files
+        files.forEach(f => {
+          if (f === baseFile) return;
+          // Merge article columns
           if (f.articleColumns) {
             const existingCols = new Set((base.articleColumns||[]).map(c=>c.article));
             (f.articleColumns||[]).forEach(c => { if (!existingCols.has(c.article)) base.articleColumns.push(c); });
           }
-          // Merge search queries
-          if (f.searchQueries) {
-            const existing = new Set((base.searchQueries||[]).map(q=>q.query));
-            (f.searchQueries||[]).forEach(q => { if (!existing.has(q.query)) base.searchQueries.push(q); });
-          }
-          // Merge article searches
+          // Merge per-article searches (competitor keys)
           if (f.articleSearches) {
             const existingArts = new Set((base.articleSearches||[]).map(a=>a.article));
             (f.articleSearches||[]).forEach(a => { if (!existingArts.has(a.article)) base.articleSearches.push(a); });
@@ -755,13 +782,36 @@
               if (!exists) base.warehouses.push(w);
             });
           }
-        }
+          // Merge competitor metrics from other files into a side store for richer competitor list
+          if (f.metrics && f.compArticles) {
+            base.extraCompetitors = base.extraCompetitors || [];
+            f.compArticles.forEach((art, idx) => {
+              const ck = 'comp' + (idx+1);
+              base.extraCompetitors.push({
+                article: art,
+                brand: f.metrics['Бренд']?.[ck],
+                orders: Number(f.metrics['Заказы, шт']?.[ck]) || 0,
+                conv: f.metrics['Конверсия в заказ, %']?.[ck],
+                pos: f.metrics['Средняя позиция']?.[ck],
+                price: f.metrics['Медианная цена покупателя, ₽']?.[ck],
+                reviews: f.metrics['Количество отзывов']?.[ck],
+                ctr: f.metrics['CTR']?.[ck],
+              });
+            });
+          }
+        });
+
         return base;
       }
 
       async function runAnalysis() {
         if (!parsedData) {
           alert("Подожди, файл ещё читается");
+          return;
+        }
+
+        if (parsedData.noMyArticle) {
+          alert("В загруженных файлах нет вашего товара (артикул 384687893). Загрузите отчёт, где ваш товар идёт первым в сравнении.");
           return;
         }
 
@@ -834,28 +884,35 @@
 
       function renderCompetitors() {
         const m = parsedData.metrics;
-        const cols = parsedData.articleColumns || [];
         const myArticle = "384687893";
+        const compArticles = parsedData.compArticles || [];
 
-        // Map metric column index to comp key (col 2->comp1, 4->comp2, 6->comp3, 8->comp4, 1->my)
-        const colToKey = { 1: "my", 2: "comp1", 4: "comp2", 6: "comp3", 8: "comp4" };
+        // Competitors from base file (metrics already remapped: comp1-4)
+        let competitors = compArticles.map((art, idx) => {
+          const k = "comp" + (idx + 1);
+          return {
+            article: art,
+            brand: m["Бренд"]?.[k] || "Конкурент",
+            orders: Number(m["Заказы, шт"]?.[k]) || 0,
+            conv: m["Конверсия в заказ, %"]?.[k],
+            pos: m["Средняя позиция"]?.[k],
+            reviews: Number(m["Количество отзывов"]?.[k]) || 0,
+            price: m["Медианная цена покупателя, ₽"]?.[k],
+            ctr: m["CTR"]?.[k],
+          };
+        });
 
-        // Build competitor list dynamically from article columns, skipping my own article
-        let competitors = cols
-          .filter((c) => c.article !== myArticle)
-          .map((c) => {
-            const k = colToKey[c.col];
-            return {
-              article: c.article,
-              brand: m["Бренд"]?.[k] || "Конкурент",
-              orders: Number(m["Заказы, шт"]?.[k]) || 0,
-              conv: m["Конверсия в заказ, %"]?.[k],
-              pos: m["Средняя позиция"]?.[k],
-              reviews: Number(m["Количество отзывов"]?.[k]) || 0,
-              price: m["Медианная цена покупателя, ₽"]?.[k],
-              ctr: m["CTR"]?.[k],
-            };
+        // Add competitors collected from OTHER files
+        (parsedData.extraCompetitors || []).forEach((c) => {
+          if (c.article === myArticle) return;
+          competitors.push({
+            article: c.article,
+            brand: c.brand || "Конкурент",
+            orders: c.orders || 0,
+            conv: c.conv, pos: c.pos, reviews: Number(c.reviews) || 0,
+            price: c.price, ctr: c.ctr,
           });
+        });
 
         // Also pull competitors from warehouse sheet (extra articles not in metrics)
         const knownArticles = new Set(competitors.map((c) => c.article).concat([myArticle]));
@@ -1078,25 +1135,25 @@
         const m = parsedData.metrics;
         const sq = parsedData.searchQueries?.slice(0, 6) || [];
         const myArticle = "384687893";
-        const cols = parsedData.articleColumns || [];
-        const colToKey = { 1: "my", 2: "comp1", 4: "comp2", 6: "comp3", 8: "comp4" };
+        const compArticles = parsedData.compArticles || [];
 
-        // Build competitors dynamically from the uploaded file, sorted by orders, top 6
-        let competitorListRaw = cols
-          .filter((c) => c.article !== myArticle)
-          .map((c) => {
-            const k = colToKey[c.col];
-            return {
-              article: c.article,
-              brand: m["Бренд"]?.[k],
-              orders: Number(m["Заказы, шт"]?.[k]) || 0,
-              conv: m["Конверсия в заказ, %"]?.[k],
-              pos: m["Средняя позиция"]?.[k],
-              price: m["Медианная цена покупателя, ₽"]?.[k],
-              reviews: m["Количество отзывов"]?.[k],
-              ctr: m["CTR"]?.[k],
-            };
-          });
+        // Build competitors from base file (remapped metrics) + extra files
+        let competitorListRaw = compArticles.map((art, idx) => {
+          const k = "comp" + (idx + 1);
+          return {
+            article: art,
+            brand: m["Бренд"]?.[k],
+            orders: Number(m["Заказы, шт"]?.[k]) || 0,
+            conv: m["Конверсия в заказ, %"]?.[k],
+            pos: m["Средняя позиция"]?.[k],
+            price: m["Медианная цена покупателя, ₽"]?.[k],
+            reviews: m["Количество отзывов"]?.[k],
+            ctr: m["CTR"]?.[k],
+          };
+        });
+        (parsedData.extraCompetitors || []).forEach((c) => {
+          if (c.article !== myArticle) competitorListRaw.push(c);
+        });
         // Collapse duplicate brands, keep strongest
         const aiByBrand = {};
         competitorListRaw.forEach((c) => {
