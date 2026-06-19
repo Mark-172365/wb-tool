@@ -725,11 +725,12 @@
           if (!name.includes("Поисковые запросы по артик")) return;
           if (name.includes("по всем")) return;
           const rows = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1 });
-          if (rows.length < 2) return;
+          if (rows.length < 3) return;
           const header = rows[0][0] || '';
           const artMatch = header.match(/артикулу (\d+)/);
           const article = artMatch ? artMatch[1] : name;
-          const queries = rows.slice(1).filter(r => r[0]).map(r => ({
+          // Row 0 = title, Row 1 = column headers, data starts Row 2
+          const queries = rows.slice(2).filter(r => r[0] && r[0] !== 'Поисковый запрос').map(r => ({
             query: r[0], volume: Number(r[1]) || 0,
             cartConv: Number(r[3]) || 0,
             orderConv: Number(r[5]) || 0,
@@ -1044,10 +1045,11 @@
         const unique = opportunities.filter(o => { if(seen.has(o.query)) return false; seen.add(o.query); return true; })
           .sort((a,b) => b.score - a.score).slice(0, 30);
 
-        // My best queries (only meaningful volume >= 1000)
+        // My best queries — meaningful volume, real conversion, ranked by volume×conversion
         const myTop = (mySearches?.queries||[])
-          .filter(q => q.volume >= 1000)
-          .sort((a,b)=>b.orderConv-a.orderConv).slice(0,15);
+          .filter(q => q.volume >= 1000 && q.orderConv > 0)
+          .map(q => ({ ...q, score: q.volume * q.orderConv }))
+          .sort((a,b)=>b.score - a.score).slice(0,15);
 
         container.innerHTML = `
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
