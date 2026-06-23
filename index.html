@@ -1271,29 +1271,58 @@ ${JSON.stringify(dataForAI.missingWarehouses, null, 2)}
         aiContent.innerHTML =
           '<span class="thinking">ИИ анализирует данные...</span>';
 
+        // Запрос с таймаутом и повторными попытками (лечит холодный старт и таймауты)
+        async function fetchWithRetry(maxAttempts) {
+          let lastError;
+          for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+              if (attempt > 1) {
+                aiContent.innerHTML = `<span class="thinking">Повторная попытка ${attempt} из ${maxAttempts}...</span>`;
+              }
+              const controller = new AbortController();
+              const timeout = setTimeout(() => controller.abort(), 90000); // 90 сек
+
+              const response = await fetch("/api/claude", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  model: "claude-sonnet-4-6",
+                  max_tokens: 2500,
+                  messages: [{ role: "user", content: prompt }],
+                }),
+                signal: controller.signal,
+              });
+              clearTimeout(timeout);
+
+              if (!response.ok) {
+                throw new Error("Сервер вернул ошибку " + response.status);
+              }
+
+              const data = await response.json();
+              if (data.error) {
+                throw new Error(data.error.message || "Ошибка API");
+              }
+              return data;
+            } catch (err) {
+              lastError = err;
+              // Пауза перед следующей попыткой
+              if (attempt < maxAttempts) {
+                await new Promise((r) => setTimeout(r, 2000));
+              }
+            }
+          }
+          throw lastError;
+        }
+
         try {
-          const response = await fetch(
-            "/api/claude",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model: "claude-sonnet-4-6",
-                max_tokens: 2500,
-                messages: [{ role: "user", content: prompt }],
-              }),
-            },
-          );
-
-          const data = await response.json();
+          const data = await fetchWithRetry(3);
           const text = data.content?.[0]?.text || "Ошибка получения анализа";
-
-          // Render with formatting
           aiContent.innerHTML = formatAIResponse(text);
         } catch (err) {
-          aiContent.innerHTML = `<span style="color:var(--red)">Ошибка: ${err.message}</span>`;
+          const msg = err.name === "AbortError"
+            ? "Анализ занял слишком долго. Попробуй ещё раз — иногда сервер отвечает не сразу."
+            : "Не удалось получить анализ: " + err.message + ". Нажми «Анализировать» ещё раз.";
+          aiContent.innerHTML = `<span style="color:var(--red)">${msg}</span>`;
         }
       }
 
