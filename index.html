@@ -1045,25 +1045,29 @@
         const unique = opportunities.filter(o => { if(seen.has(o.query)) return false; seen.add(o.query); return true; })
           .sort((a,b) => b.score - a.score).slice(0, 30);
 
-        // My best queries — meaningful volume, real conversion, ranked by volume×conversion
+        // All my keys — show everything, sorted by search volume (most traffic first)
         const myTop = (mySearches?.queries||[])
-          .filter(q => q.volume >= 1000 && q.orderConv > 0)
-          .map(q => ({ ...q, score: q.volume * q.orderConv }))
-          .sort((a,b)=>b.score - a.score).slice(0,15);
+          .filter(q => q.query && q.volume > 0)
+          .sort((a,b)=> b.volume - a.volume);
 
         container.innerHTML = `
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
             <div class="card">
               <div style="font-size:12px;font-weight:600;color:var(--accent);margin-bottom:12px;text-transform:uppercase;letter-spacing:1px;">
-                ✅ Мои лучшие ключи (по конверсии в заказ)
+                ✅ Все мои ключи (${myTop.length}) — по объёму запросов
               </div>
-              ${myTop.map(q => `
+              <div style="max-height:420px;overflow-y:auto;">
+              ${myTop.map(q => {
+                const convClass = q.orderConv >= 30 ? 'badge-green' : q.orderConv > 0 ? 'badge-amber' : 'badge-red';
+                return `
                 <div class="stat-row">
                   <span class="stat-key" style="flex:1">${q.query}</span>
                   <span style="font-size:11px;color:var(--muted);margin-right:8px">${Number(q.volume).toLocaleString('ru')} зап.</span>
-                  <span class="badge badge-green">${q.orderConv}%</span>
-                </div>`).join('')}
-              ${!myTop.length ? '<p style="color:var(--muted);font-size:13px">Нет ключей с объёмом от 1000 запросов</p>' : ''}
+                  <span class="badge ${convClass}">${q.orderConv}%</span>
+                </div>`;
+              }).join('')}
+              </div>
+              ${!myTop.length ? '<p style="color:var(--muted);font-size:13px">Ключи не найдены</p>' : ''}
             </div>
             <div class="card">
               <div style="font-size:12px;font-weight:600;color:#f59e0b;margin-bottom:12px;text-transform:uppercase;letter-spacing:1px;">
